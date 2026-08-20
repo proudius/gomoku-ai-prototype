@@ -7,9 +7,11 @@
   },
   "scripts": {
     "arena": "vinext dev",
+    "build:pages": "vite build --config vite.pages.config.ts",
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
+    "preview:pages": "vite preview --config vite.pages.config.ts",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

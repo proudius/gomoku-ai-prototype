@@ -2,6 +2,12 @@
 
 15×15 오목판에서 사람·예제 AI v1~v5·사용자 JavaScript AI를 대국시키고 성능을 비교하는 로컬 AI 연구실입니다.
 
+## GitHub Pages
+
+공개 Arena: **https://proudius.github.io/gomoku-ai-prototype/**
+
+`main` 브랜치에 변경 사항을 올리면 `.github/workflows/pages.yml`이 정적 Arena를 빌드해 GitHub Pages에 자동 배포합니다.
+
 ## 가장 빠른 실행
 
 Windows 탐색기에서 **`오목 AI Arena 실행.cmd`**를 더블클릭하세요.
@@ -33,4 +39,5 @@ npm run arena
 ```powershell
 npm run lint
 npm run build
+npm run build:pages
 ```
