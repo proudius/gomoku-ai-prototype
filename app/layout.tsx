@@ -12,7 +12,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const baseUrl = new URL(`${protocol}://${host}`);
   const title = "오목 AI Arena | 코드·대전·벤치마크";
-  const description = "내 JavaScript 오목 AI를 작성하고 v1~v5 예제 AI와 대전하며 탐색 성능을 비교하는 연구실";
+  const description = "15×15 기본 오목과 9×9 랜덤 스코어 변형에서 내 JavaScript AI를 v1~v5 예제 AI와 대전시키는 연구실";
   const image = new URL("/og-arena.png", baseUrl).toString();
 
   return {

@@ -2,14 +2,17 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
-const SIZE = 15;
+const CLASSIC_SIZE = 15;
+const SCORE_SIZE = 9;
 const COLS = "ABCDEFGHJKLMNOP";
 const DIRECTIONS = [[1, 0], [0, 1], [1, 1], [1, -1]] as const;
-const STARS = new Set(["3-3", "3-11", "7-7", "11-3", "11-11"]);
+const CLASSIC_STARS = new Set(["3-3", "3-11", "7-7", "11-3", "11-11"]);
+const SCORE_STARS = new Set(["2-2", "2-6", "4-4", "6-2", "6-6"]);
 
-type Stone = 0 | 1 | 2;
+type Stone = 0 | 1 | 2 | 3;
 type Player = 1 | 2;
 type Winner = Player | "draw" | null;
+type GameMode = "classic" | "score9";
 type AiKey = "human" | "v1" | "v2" | "v3" | "v4" | "v5" | "custom";
 type Move = { row: number; col: number; player: Player };
 type Snapshot = { board: Stone[][]; moves: Move[]; turn: Player };
@@ -53,28 +56,43 @@ const DEFAULT_CUSTOM_AI = `function chooseMove(state, me) {
 
 const EMPTY_TELEMETRY: Telemetry = { nodes: 0, depth: 0, elapsed: 0, source: "대기", move: "—" };
 
-function emptyBoard(): Stone[][] {
-  return Array.from({ length: SIZE }, () => Array<Stone>(SIZE).fill(0));
+function emptyBoard(size = CLASSIC_SIZE): Stone[][] {
+  return Array.from({ length: size }, () => Array<Stone>(size).fill(0));
 }
 
-function inside(row: number, col: number) {
-  return row >= 0 && row < SIZE && col >= 0 && col < SIZE;
+function createBoard(mode: GameMode): Stone[][] {
+  if (mode === "classic") return emptyBoard(CLASSIC_SIZE);
+  const board = emptyBoard(SCORE_SIZE);
+  const cells = Array.from({ length: SCORE_SIZE * SCORE_SIZE }, (_, index) => index);
+  for (let index = cells.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [cells[index], cells[swap]] = [cells[swap], cells[index]];
+  }
+  const fillCount = Math.round(cells.length * 0.1);
+  cells.slice(0, fillCount).forEach((cell) => { board[Math.floor(cell / SCORE_SIZE)][cell % SCORE_SIZE] = 3; });
+  cells.slice(fillCount, fillCount * 2).forEach((cell) => { board[Math.floor(cell / SCORE_SIZE)][cell % SCORE_SIZE] = 1; });
+  cells.slice(fillCount * 2, fillCount * 3).forEach((cell) => { board[Math.floor(cell / SCORE_SIZE)][cell % SCORE_SIZE] = 2; });
+  return board;
 }
 
-function coordinate(row: number, col: number) {
-  return `${COLS[col]}${SIZE - row}`;
+function inside(board: Stone[][], row: number, col: number) {
+  return row >= 0 && row < board.length && col >= 0 && col < board.length;
+}
+
+function coordinate(row: number, col: number, size = CLASSIC_SIZE) {
+  return `${COLS[col]}${size - row}`;
 }
 
 function countSide(board: Stone[][], row: number, col: number, dr: number, dc: number, player: Player) {
   let count = 0;
   let r = row + dr;
   let c = col + dc;
-  while (inside(r, c) && board[r][c] === player) {
+  while (inside(board, r, c) && board[r][c] === player) {
     count += 1;
     r += dr;
     c += dc;
   }
-  return { count, open: inside(r, c) && board[r][c] === 0 };
+  return { count, open: inside(board, r, c) && board[r][c] === 0 };
 }
 
 function wouldWin(board: Stone[][], row: number, col: number, player: Player) {
@@ -92,6 +110,32 @@ function isWinAt(board: Stone[][], row: number, col: number, player: Player) {
     const b = countSide(board, row, col, -dr, -dc, player);
     return 1 + a.count + b.count >= 5;
   });
+}
+
+function countFiveLines(board: Stone[][], player: Player) {
+  let score = 0;
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board.length; col += 1) {
+      for (const [dr, dc] of DIRECTIONS) {
+        const endRow = row + dr * 4;
+        const endCol = col + dc * 4;
+        if (!inside(board, endRow, endCol)) continue;
+        let complete = true;
+        for (let step = 0; step < 5; step += 1) {
+          if (board[row + dr * step][col + dc * step] !== player) { complete = false; break; }
+        }
+        if (complete) score += 1;
+      }
+    }
+  }
+  return score;
+}
+
+function scoreOutcome(board: Stone[][]) {
+  const black = countFiveLines(board, 1);
+  const white = countFiveLines(board, 2);
+  const winner: Winner = black === white ? "draw" : black > white ? 1 : 2;
+  return { black, white, winner };
 }
 
 function patternScore(board: Stone[][], row: number, col: number, player: Player) {
@@ -116,15 +160,18 @@ function patternScore(board: Stone[][], row: number, col: number, player: Player
 function legalCandidates(board: Stone[][], radius = 2) {
   let occupied = false;
   for (const row of board) if (row.some(Boolean)) occupied = true;
-  if (!occupied) return [{ row: 7, col: 7 }];
+  if (!occupied) {
+    const center = Math.floor(board.length / 2);
+    return [{ row: center, col: center }];
+  }
   const result: Array<{ row: number; col: number }> = [];
-  for (let row = 0; row < SIZE; row += 1) {
-    for (let col = 0; col < SIZE; col += 1) {
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board.length; col += 1) {
       if (board[row][col] !== 0) continue;
       let near = false;
       for (let dr = -radius; dr <= radius && !near; dr += 1) {
         for (let dc = -radius; dc <= radius; dc += 1) {
-          if (inside(row + dr, col + dc) && board[row + dr][col + dc] !== 0) {
+          if (inside(board, row + dr, col + dc) && board[row + dr][col + dc] !== 0) {
             near = true;
             break;
           }
@@ -138,15 +185,16 @@ function legalCandidates(board: Stone[][], radius = 2) {
 
 function allLegalMoves(board: Stone[][]) {
   const result: Array<{ row: number; col: number }> = [];
-  for (let row = 0; row < SIZE; row += 1) {
-    for (let col = 0; col < SIZE; col += 1) if (board[row][col] === 0) result.push({ row, col });
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board.length; col += 1) if (board[row][col] === 0) result.push({ row, col });
   }
   return result;
 }
 
 function moveScore(board: Stone[][], row: number, col: number, player: Player) {
   const opponent: Player = player === 1 ? 2 : 1;
-  const center = 28 - Math.abs(row - 7) - Math.abs(col - 7);
+  const midpoint = (board.length - 1) / 2;
+  const center = board.length * 2 - Math.abs(row - midpoint) - Math.abs(col - midpoint);
   return patternScore(board, row, col, player) * 1.14 + patternScore(board, row, col, opponent) + center;
 }
 
@@ -157,25 +205,26 @@ function rankedMoves(board: Stone[][], player: Player, limit: number, radius = 2
     .slice(0, limit);
 }
 
-function staticEvaluation(board: Stone[][], root: Player) {
+function staticEvaluation(board: Stone[][], root: Player, scoring = false) {
   const other: Player = root === 1 ? 2 : 1;
   const mine = rankedMoves(board, root, 5).reduce((sum, move, index) => sum + move.score / (index + 1), 0);
   const theirs = rankedMoves(board, other, 5).reduce((sum, move, index) => sum + move.score / (index + 1), 0);
-  return mine - theirs * 1.05;
+  const lineValue = scoring ? (countFiveLines(board, root) - countFiveLines(board, other)) * 2_000_000 : 0;
+  return mine - theirs * 1.05 + lineValue;
 }
 
-function minimax(board: Stone[][], depth: number, current: Player, root: Player, alpha: number, beta: number, counter: { nodes: number }): number {
-  if (depth === 0) return staticEvaluation(board, root);
+function minimax(board: Stone[][], depth: number, current: Player, root: Player, alpha: number, beta: number, counter: { nodes: number }, scoring = false): number {
+  if (depth === 0) return staticEvaluation(board, root, scoring);
   const maximizing = current === root;
   const moves = rankedMoves(board, current, depth > 1 ? 7 : 5);
   if (moves.length === 0) return 0;
   let best = maximizing ? -Infinity : Infinity;
   for (const move of moves) {
     counter.nodes += 1;
-    if (wouldWin(board, move.row, move.col, current)) return maximizing ? 100_000_000 + depth : -100_000_000 - depth;
+    if (!scoring && wouldWin(board, move.row, move.col, current)) return maximizing ? 100_000_000 + depth : -100_000_000 - depth;
     board[move.row][move.col] = current;
     const next: Player = current === 1 ? 2 : 1;
-    const value = minimax(board, depth - 1, next, root, alpha, beta, counter);
+    const value = minimax(board, depth - 1, next, root, alpha, beta, counter, scoring);
     board[move.row][move.col] = 0;
     if (maximizing) {
       best = Math.max(best, value);
@@ -189,7 +238,7 @@ function minimax(board: Stone[][], depth: number, current: Player, root: Player,
   return best;
 }
 
-function chooseBuiltIn(boardInput: Stone[][], level: number, player: Player): Decision {
+function chooseBuiltIn(boardInput: Stone[][], level: number, player: Player, mode: GameMode = "classic"): Decision {
   const started = performance.now();
   const board = boardInput.map((row) => [...row]);
   const opponent: Player = player === 1 ? 2 : 1;
@@ -215,7 +264,7 @@ function chooseBuiltIn(boardInput: Stone[][], level: number, player: Player): De
         for (const move of ranked.slice(0, 10)) {
           board[move.row][move.col] = player;
           const reply = rankedMoves(board, opponent, 7)[0]?.score ?? 0;
-          const score = move.score - reply * 0.94 + staticEvaluation(board, player) * 0.06;
+          const score = move.score - reply * 0.94 + staticEvaluation(board, player, mode === "score9") * 0.06;
           board[move.row][move.col] = 0;
           counter.nodes += 7;
           if (score > value) { value = score; choice = move; }
@@ -225,7 +274,7 @@ function chooseBuiltIn(boardInput: Stone[][], level: number, player: Player): De
         let value = -Infinity;
         for (const move of ranked.slice(0, 10)) {
           board[move.row][move.col] = player;
-          const score = minimax(board, 2, opponent, player, -Infinity, Infinity, counter) + move.score * 0.1;
+          const score = minimax(board, 2, opponent, player, -Infinity, Infinity, counter, mode === "score9") + move.score * 0.1;
           board[move.row][move.col] = 0;
           if (score > value) { value = score; choice = move; }
         }
@@ -242,14 +291,14 @@ function chooseBuiltIn(boardInput: Stone[][], level: number, player: Player): De
       depth: definition.depth,
       elapsed: performance.now() - started,
       source: definition.method,
-      move: coordinate(choice.row, choice.col),
+      move: coordinate(choice.row, choice.col, board.length),
     },
   };
 }
 
-function runCustomAi(code: string, board: Stone[][], player: Player, moves: Move[], timeout = 500): Promise<Decision> {
+function runCustomAi(code: string, board: Stone[][], player: Player, moves: Move[], mode: GameMode = "classic", timeout = 500): Promise<Decision> {
   const legalMoves = allLegalMoves(board);
-  const state = { board, legalMoves, moveCount: moves.length, lastMove: moves.at(-1) ?? null };
+  const state = { board, legalMoves, moveCount: moves.length, lastMove: moves.at(-1) ?? null, mode, blockedValue: 3 };
   const workerSource = `self.onmessage = (event) => {
     const started = performance.now();
     try {
@@ -271,7 +320,7 @@ function runCustomAi(code: string, board: Stone[][], player: Player, moves: Move
       const move = event.data.move;
       const legal = legalMoves.some((item) => item.row === move?.row && item.col === move?.col);
       if (!legal) { reject(new Error("합법적인 { row, col } 수를 반환하지 않았습니다.")); return; }
-      resolve({ row: move.row, col: move.col, telemetry: { nodes: 1, depth: 0, elapsed: event.data.elapsed, source: "CUSTOM WORKER", move: coordinate(move.row, move.col) } });
+      resolve({ row: move.row, col: move.col, telemetry: { nodes: 1, depth: 0, elapsed: event.data.elapsed, source: "CUSTOM WORKER", move: coordinate(move.row, move.col, board.length) } });
     };
     worker.onerror = () => { window.clearTimeout(timer); finish(); reject(new Error("사용자 AI 실행 중 오류가 발생했습니다.")); };
     worker.postMessage({ code, state, me: player });
@@ -284,13 +333,14 @@ function playerName(key: AiKey) {
   return AI_LEVELS[Number(key.slice(1)) - 1].name;
 }
 
-async function getDecision(key: AiKey, board: Stone[][], player: Player, moves: Move[], customCode: string) {
-  if (key === "custom") return runCustomAi(customCode, board, player, moves);
-  return chooseBuiltIn(board, Number(key.slice(1)), player);
+async function getDecision(key: AiKey, board: Stone[][], player: Player, moves: Move[], customCode: string, mode: GameMode) {
+  if (key === "custom") return runCustomAi(customCode, board, player, moves, mode);
+  return chooseBuiltIn(board, Number(key.slice(1)), player, mode);
 }
 
 export default function Home() {
-  const [board, setBoard] = useState<Stone[][]>(() => emptyBoard());
+  const [mode, setMode] = useState<GameMode>("classic");
+  const [board, setBoard] = useState<Stone[][]>(() => createBoard("classic"));
   const [turn, setTurn] = useState<Player>(1);
   const [winner, setWinner] = useState<Winner>(null);
   const [moves, setMoves] = useState<Move[]>([]);
@@ -321,6 +371,9 @@ export default function Home() {
     wins: sum.wins + row.wins, draws: sum.draws + row.draws, losses: sum.losses + row.losses,
   }), { wins: 0, draws: 0, losses: 0 }), [battleRows]);
   const battleGames = battleSummary.wins + battleSummary.draws + battleSummary.losses;
+  const liveScores = useMemo(() => ({ black: countFiveLines(board, 1), white: countFiveLines(board, 2) }), [board]);
+  const openCells = useMemo(() => allLegalMoves(board).length, [board]);
+  const starPoints = mode === "score9" ? SCORE_STARS : CLASSIC_STARS;
 
   useEffect(() => {
     const saved = window.localStorage.getItem("gomoku-arena-custom-ai");
@@ -340,7 +393,7 @@ export default function Home() {
       setThinking(true);
       setNotice(`${currentName}가 수를 계산하고 있습니다.`);
       try {
-        const decision = await getDecision(currentKey, board.map((row) => [...row]), turn, moves, customCode);
+        const decision = await getDecision(currentKey, board.map((row) => [...row]), turn, moves, customCode, mode);
         if (cancelled) return;
         const next = board.map((row) => [...row]);
         next[decision.row][decision.col] = turn;
@@ -350,17 +403,19 @@ export default function Home() {
         setMoves(nextMoves);
         setHint(null);
         setTelemetry(decision.telemetry);
-        if (isWinAt(next, decision.row, decision.col, turn)) {
+        if (mode === "classic" && isWinAt(next, decision.row, decision.col, turn)) {
           setWinner(turn);
           setModalOpen(true);
           setNotice(`${playerName(currentKey)} 승리 · ${decision.telemetry.move}에서 오목 완성`);
-        } else if (nextMoves.length === SIZE * SIZE) {
-          setWinner("draw");
+        } else if (allLegalMoves(next).length === 0) {
+          const result = mode === "score9" ? scoreOutcome(next) : { black: 0, white: 0, winner: "draw" as const };
+          setWinner(result.winner);
           setModalOpen(true);
-          setNotice("225수를 모두 두어 무승부입니다.");
+          setNotice(mode === "score9" ? `빈칸이 모두 찼습니다 · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
         } else {
           setTurn(turn === 1 ? 2 : 1);
-          setNotice(`${decision.telemetry.move}에 착수했습니다.`);
+          const scoreText = mode === "score9" ? ` · 점수 흑 ${countFiveLines(next, 1)} : ${countFiveLines(next, 2)} 백` : "";
+          setNotice(`${decision.telemetry.move}에 착수했습니다.${scoreText}`);
         }
       } catch (error) {
         if (!cancelled) {
@@ -374,7 +429,7 @@ export default function Home() {
       }
     }, 300);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [board, currentKey, currentName, customCode, moves, turn, winner]);
+  }, [board, currentKey, currentName, customCode, mode, moves, turn, winner]);
 
   function play(row: number, col: number) {
     if (winner || thinking || currentKey !== "human" || board[row][col] !== 0) return;
@@ -385,21 +440,27 @@ export default function Home() {
     setBoard(next);
     setMoves(nextMoves);
     setHint(null);
-    setTelemetry({ nodes: 0, depth: 0, elapsed: 0, source: "HUMAN", move: coordinate(row, col) });
-    if (isWinAt(next, row, col, turn)) {
+    setTelemetry({ nodes: 0, depth: 0, elapsed: 0, source: "HUMAN", move: coordinate(row, col, board.length) });
+    if (mode === "classic" && isWinAt(next, row, col, turn)) {
       setWinner(turn);
       setModalOpen(true);
-      setNotice(`${turn === 1 ? "흑" : "백"} 승리 · ${coordinate(row, col)}에서 오목 완성`);
+      setNotice(`${turn === 1 ? "흑" : "백"} 승리 · ${coordinate(row, col, board.length)}에서 오목 완성`);
+    } else if (allLegalMoves(next).length === 0) {
+      const result = mode === "score9" ? scoreOutcome(next) : { black: 0, white: 0, winner: "draw" as const };
+      setWinner(result.winner);
+      setModalOpen(true);
+      setNotice(mode === "score9" ? `빈칸이 모두 찼습니다 · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
     } else {
       setTurn(turn === 1 ? 2 : 1);
-      setNotice(`${coordinate(row, col)}에 착수했습니다.`);
+      const scoreText = mode === "score9" ? ` · 점수 흑 ${countFiveLines(next, 1)} : ${countFiveLines(next, 2)} 백` : "";
+      setNotice(`${coordinate(row, col, board.length)}에 착수했습니다.${scoreText}`);
     }
   }
 
-  function resetGame() {
-    setBoard(emptyBoard()); setTurn(1); setWinner(null); setMoves([]); setHistory([]);
+  function resetGame(targetMode: GameMode = mode) {
+    setBoard(createBoard(targetMode)); setTurn(1); setWinner(null); setMoves([]); setHistory([]);
     setHint(null); setTelemetry(EMPTY_TELEMETRY); setModalOpen(false); setThinking(false);
-    setNotice("흑돌을 놓으면 대국이 시작됩니다.");
+    setNotice(targetMode === "score9" ? "장애물·흑돌·백돌이 각각 8칸 배치되었습니다. 빈칸이 없어질 때까지 점수를 만드세요." : "흑돌을 놓으면 대국이 시작됩니다.");
   }
 
   function undo() {
@@ -412,7 +473,7 @@ export default function Home() {
 
   function analyzeHint() {
     if (winner) return;
-    const decision = chooseBuiltIn(board, 5, turn);
+    const decision = chooseBuiltIn(board, 5, turn, mode);
     setHint({ row: decision.row, col: decision.col });
     setTelemetry(decision.telemetry);
     setNotice(`추천 수는 ${decision.telemetry.move}입니다. v5가 ${decision.telemetry.nodes.toLocaleString()}개 노드를 확인했습니다.`);
@@ -446,13 +507,13 @@ export default function Home() {
   }
 
   async function copySpec() {
-    const spec = `오목 AI 함수를 작성해 주세요.\nfunction chooseMove(state, me)\n- me: 1(흑) 또는 2(백)\n- state.board: 15x15 배열, 0 빈칸 / 1 흑 / 2 백\n- state.legalMoves: 반환 가능한 { row, col } 배열\n- state.moveCount, state.lastMove 제공\n- 제한: 한 수 500ms, 파일 50KB\n- 반환: state.legalMoves에 있는 { row, col } 하나`;
+    const spec = `오목 AI 함수를 작성해 주세요.\nfunction chooseMove(state, me)\n- me: 1(흑) 또는 2(백)\n- state.mode: classic 또는 score9\n- state.board: 15x15 또는 9x9 배열, 0 빈칸 / 1 흑 / 2 백 / 3 장애물\n- state.legalMoves: 반환 가능한 { row, col } 배열\n- state.moveCount, state.lastMove 제공\n- score9: 빈칸이 없을 때 종료, 완성된 5칸 구간 수로 득점\n- 제한: 한 수 500ms, 파일 50KB\n- 반환: state.legalMoves에 있는 { row, col } 하나`;
     await navigator.clipboard.writeText(spec);
     setCodeStatusType("success"); setCodeStatus("LLM용 오목 AI 규격을 복사했습니다.");
   }
 
   async function simulateBattle(level: number, customPlayer: Player) {
-    const simBoard = emptyBoard();
+    const simBoard = createBoard(mode);
     const simMoves: Move[] = [];
     let simTurn: Player = 1;
     let error = "";
@@ -461,18 +522,24 @@ export default function Home() {
       let decision: Decision;
       try {
         decision = simTurn === customPlayer
-          ? await runCustomAi(customCode, simBoard.map((row) => [...row]), simTurn, simMoves)
-          : chooseBuiltIn(simBoard, level, simTurn);
+          ? await runCustomAi(customCode, simBoard.map((row) => [...row]), simTurn, simMoves, mode)
+          : chooseBuiltIn(simBoard, level, simTurn, mode);
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
         return { winner: (simTurn === 1 ? 2 : 1) as Player, error, log: `AI 오류: ${error}` };
       }
       simBoard[decision.row][decision.col] = simTurn;
       simMoves.push({ row: decision.row, col: decision.col, player: simTurn });
-      if (isWinAt(simBoard, decision.row, decision.col, simTurn)) {
-        return { winner: simTurn as Winner, error, log: simMoves.map((move, index) => `${index + 1}.${move.player === 1 ? "B" : "W"}:${coordinate(move.row, move.col)}`).join(" ") };
+      if (mode === "classic" && isWinAt(simBoard, decision.row, decision.col, simTurn)) {
+        return { winner: simTurn as Winner, error, log: simMoves.map((move, index) => `${index + 1}.${move.player === 1 ? "B" : "W"}:${coordinate(move.row, move.col, simBoard.length)}`).join(" ") };
       }
-      if (simMoves.length === SIZE * SIZE) return { winner: "draw" as const, error, log: "225수 무승부" };
+      if (allLegalMoves(simBoard).length === 0) {
+        if (mode === "score9") {
+          const result = scoreOutcome(simBoard);
+          return { winner: result.winner, error, log: `최종 점수 흑 ${result.black} : ${result.white} 백` };
+        }
+        return { winner: "draw" as const, error, log: "모든 교차점을 둔 무승부" };
+      }
       simTurn = simTurn === 1 ? 2 : 1;
     }
     return { winner: "draw" as const, error, log: "120수 제한 무승부" };
@@ -520,7 +587,7 @@ export default function Home() {
         <div>
           <p className="eyebrow">GOMOKU · SEARCH LAB</p>
           <h1>한 줄의 승부, <span>끝까지 읽는 AI.</span></h1>
-          <p className="hero-copy">15×15 오목 엔진 위에서 무작위 v1부터 알파베타 v5까지 직접 대국하고, 내 JavaScript AI의 성능을 같은 조건에서 비교하세요.</p>
+          <p className="hero-copy">15×15 기본 오목과 장애물·선배치 돌이 있는 9×9 랜덤 스코어 오목에서, 무작위 v1부터 알파베타 v5까지 직접 대국하고 내 JavaScript AI를 비교하세요.</p>
         </div>
         <div className="hero-badge"><b>5</b><span>AI LEVELS</span></div>
       </header>
@@ -532,16 +599,24 @@ export default function Home() {
             <div className={`turn-pill ${thinking ? "thinking" : ""}`}>{status}</div>
           </div>
 
+          <div className="game-mode-switch" role="radiogroup" aria-label="게임 규칙 선택">
+            <button type="button" role="radio" aria-checked={mode === "classic"} className={mode === "classic" ? "active" : ""} onClick={() => { setMode("classic"); resetGame("classic"); }}><b>기본 오목 · 15×15</b><small>5개를 먼저 연결하면 승리</small></button>
+            <button type="button" role="radio" aria-checked={mode === "score9"} className={mode === "score9" ? "active" : ""} onClick={() => { setMode("score9"); resetGame("score9"); }}><b>랜덤 스코어 · 9×9</b><small>빈칸 종료 · 완성한 5칸 구간 득점</small></button>
+          </div>
+
           <div className="player-strip opponent-strip">
             <div className="stone-avatar white">W</div>
             <div><b>{playerName(p2)}</b><small>백 · 후공</small></div>
+            {mode === "score9" && <strong className="score-chip">{liveScores.white}점</strong>}
             <span className={turn === 2 && !winner ? "player-live" : "player-dot"} />
           </div>
 
+          {mode === "score9" && <div className="variant-scoreboard" aria-label={`현재 점수 흑 ${liveScores.black}점, 백 ${liveScores.white}점, 빈칸 ${openCells}개`}><span>흑 <b>{liveScores.black}</b></span><i>현재 점수</i><span>백 <b>{liveScores.white}</b></span><small>남은 빈칸 {openCells}</small></div>}
+
           <div className="board-wrap">
-            <div className="file-labels">{COLS.split("").map((label) => <span key={label}>{label}</span>)}</div>
-            <div className="rank-labels">{Array.from({ length: SIZE }, (_, index) => <span key={index}>{SIZE - index}</span>)}</div>
-            <div className="arena-board" aria-label="15x15 오목판">
+            <div className="file-labels" style={{ gridTemplateColumns: `repeat(${board.length}, 1fr)` }}>{COLS.slice(0, board.length).split("").map((label) => <span key={label}>{label}</span>)}</div>
+            <div className="rank-labels" style={{ gridTemplateRows: `repeat(${board.length}, 1fr)` }}>{Array.from({ length: board.length }, (_, index) => <span key={index}>{board.length - index}</span>)}</div>
+            <div className={`arena-board ${mode === "score9" ? "score-board" : ""}`} style={{ gridTemplateColumns: `repeat(${board.length}, 1fr)`, gridTemplateRows: `repeat(${board.length}, 1fr)` }} aria-label={`${board.length}x${board.length} 오목판`}>
               {board.map((row, rowIndex) => row.map((stone, colIndex) => {
                 const last = lastMove?.row === rowIndex && lastMove?.col === colIndex;
                 const recommended = hint?.row === rowIndex && hint?.col === colIndex;
@@ -549,13 +624,14 @@ export default function Home() {
                   <button
                     type="button"
                     key={`${rowIndex}-${colIndex}`}
-                    className={`intersection ${last ? "last" : ""} ${recommended ? "recommended" : ""}`}
+                    className={`intersection ${stone === 3 ? "blocked" : ""} ${last ? "last" : ""} ${recommended ? "recommended" : ""}`}
                     onClick={() => play(rowIndex, colIndex)}
                     disabled={stone !== 0 || Boolean(winner) || thinking || currentKey !== "human"}
-                    aria-label={`${coordinate(rowIndex, colIndex)}${stone === 1 ? " 흑돌" : stone === 2 ? " 백돌" : " 빈칸"}`}
+                    aria-label={`${coordinate(rowIndex, colIndex, board.length)}${stone === 1 ? " 흑돌" : stone === 2 ? " 백돌" : stone === 3 ? " 장애물, 착수 불가" : " 빈칸"}`}
                   >
-                    {stone !== 0 && <span className={`board-stone ${stone === 1 ? "black" : "white"}`} />}
-                    {stone === 0 && STARS.has(`${rowIndex}-${colIndex}`) && <span className="star" />}
+                    {(stone === 1 || stone === 2) && <span className={`board-stone ${stone === 1 ? "black" : "white"}`} />}
+                    {stone === 3 && <span className="blocked-cell" aria-hidden="true">×</span>}
+                    {stone === 0 && starPoints.has(`${rowIndex}-${colIndex}`) && <span className="star" />}
                   </button>
                 );
               }))}
@@ -565,11 +641,12 @@ export default function Home() {
           <div className="player-strip">
             <div className="stone-avatar black">B</div>
             <div><b>{playerName(p1)}</b><small>흑 · 선공</small></div>
+            {mode === "score9" && <strong className="score-chip">{liveScores.black}점</strong>}
             <span className={turn === 1 && !winner ? "player-live" : "player-dot"} />
           </div>
 
           <div className="board-actions">
-            <button type="button" className="primary" onClick={resetGame}>새 대국</button>
+            <button type="button" className="primary" onClick={() => resetGame()}>새 대국</button>
             <button type="button" onClick={undo} disabled={!history.length || thinking}>한 수 취소</button>
             <button type="button" onClick={analyzeHint} disabled={Boolean(winner) || thinking}>추천 수 분석</button>
             <button type="button" onClick={autoPlay}>AI끼리 1판</button>
@@ -614,11 +691,11 @@ export default function Home() {
             </div>
             <div className="battle-progress"><div><span>{battleRunning ? "대전 진행 중" : battleProgress.done ? "대전 완료" : "대기 중"}</span><span>{battleProgress.done} / {battleProgress.total}</span></div><i><b style={{ width: `${battleProgress.total ? battleProgress.done / battleProgress.total * 100 : 0}%` }} /></i></div>
             <div className="battle-table-wrap"><table className="battle-table"><thead><tr><th>상대</th><th>승</th><th>무</th><th>패</th><th>승률</th><th>오류</th></tr></thead><tbody>{battleRows.length ? battleRows.map((row) => { const count = row.wins + row.draws + row.losses; return <tr key={row.level}><td>v{row.level}</td><td>{row.wins}</td><td>{row.draws}</td><td>{row.losses}</td><td>{count ? Math.round(row.wins / count * 100) : 0}%</td><td>{row.errors}</td></tr>; }) : <tr><td colSpan={6}>대전을 시작하면 결과가 표시됩니다.</td></tr>}</tbody></table></div>
-            <p className="battle-note">상대마다 내 AI의 흑과 백 경기 수를 동일하게 배정합니다. 한 경기는 최대 120수입니다.</p>
+            <p className="battle-note">현재 선택한 {mode === "score9" ? "9×9 랜덤 스코어" : "15×15 기본 오목"} 규칙으로 대전합니다. 상대마다 내 AI의 흑과 백 경기 수를 동일하게 배정합니다.</p>
             <section className="match-logs"><div className="match-logs-title"><b>경기별 로그</b><span>최근 경기 우선</span></div><div className="match-log-list">{battleLogs.length ? battleLogs.map((log, index) => <details className="match-log-item" key={`${index}-${log.slice(0, 12)}`}><summary>{log.split("\n")[0]}</summary><pre>{log}</pre></details>) : <p className="match-log-empty">대전을 완료하면 경기별 로그가 표시됩니다.</p>}</div></section>
           </article>
         </div>
-        <details className="api-contract"><summary>AI 함수 입력·출력 규격 보기</summary><div className="contract-grid"><div><b>입력</b><pre>{`function chooseMove(state, me)\n\nstate.board       // 15×15 배열\nstate.legalMoves  // 가능한 {row,col}\nstate.moveCount   // 현재 수\nstate.lastMove    // 직전 수\nme                // 1 흑 | 2 백`}</pre></div><div><b>반환</b><pre>{`{ row: 7, col: 7 }`}</pre><p>반드시 <code>state.legalMoves</code>에 들어 있는 수 하나를 반환하세요.</p></div></div></details>
+        <details className="api-contract"><summary>AI 함수 입력·출력 규격 보기</summary><div className="contract-grid"><div><b>입력</b><pre>{`function chooseMove(state, me)\n\nstate.mode        // classic | score9\nstate.board       // 15×15 또는 9×9 배열\n                  // 0 빈칸 | 1 흑 | 2 백 | 3 장애물\nstate.legalMoves  // 가능한 {row,col}\nstate.moveCount   // 현재 수\nstate.lastMove    // 직전 수\nme                // 1 흑 | 2 백`}</pre></div><div><b>반환</b><pre>{`{ row: 7, col: 7 }`}</pre><p>반드시 <code>state.legalMoves</code>에 들어 있는 수 하나를 반환하세요. <code>score9</code>에서는 5칸 구간을 많이 완성할수록 유리합니다.</p></div></div></details>
       </section>
 
       <section className="post-arena-layout">
@@ -629,7 +706,7 @@ export default function Home() {
             <section className="telemetry-panel"><div className="panel-head compact"><div><span className="step">04 · TELEMETRY</span><h2>마지막 탐색</h2></div><span className="exact-chip">{telemetry.source}</span></div><div className="metrics"><div><span>탐색 노드</span><b>{telemetry.nodes.toLocaleString()}</b></div><div><span>완료 깊이</span><b>{telemetry.depth}</b></div><div><span>생각 시간</span><b>{telemetry.elapsed.toFixed(1)} ms</b></div><div><span>진행 수</span><b>{moves.length}</b></div></div><div className="analysis-line"><span>선택한 수</span><strong>{telemetry.move}</strong></div></section>
           </div>
         </details>
-        <section className="panel record-panel"><div className="panel-head compact"><div><span className="step">05 · GAME LOG</span><h2>기보</h2></div><button type="button" className="text-button" onClick={resetGame}>지우기</button></div><ol className="move-log">{moves.length ? moves.map((move, index) => <li key={`${index}-${move.row}-${move.col}`}>{index + 1}. {move.player === 1 ? "B" : "W"} {coordinate(move.row, move.col)}</li>) : <li className="empty">아직 둔 수가 없습니다.</li>}</ol></section>
+        <section className="panel record-panel"><div className="panel-head compact"><div><span className="step">05 · GAME LOG</span><h2>기보</h2></div><button type="button" className="text-button" onClick={() => resetGame()}>지우기</button></div><ol className="move-log">{moves.length ? moves.map((move, index) => <li key={`${index}-${move.row}-${move.col}`}>{index + 1}. {move.player === 1 ? "B" : "W"} {coordinate(move.row, move.col, board.length)}</li>) : <li className="empty">아직 둔 수가 없습니다.</li>}</ol></section>
       </section>
 
       <section className="levels-section">
@@ -637,9 +714,9 @@ export default function Home() {
         <div className="level-cards">{AI_LEVELS.map((ai) => <article className={`level-card ${p2 === ai.key ? "active" : ""}`} data-version={`V${ai.level}`} key={ai.level}><span className="bar" style={{ width: `${ai.power}%` }} /><b>{ai.name}</b><small>{ai.method}</small><p>{ai.description}</p></article>)}</div>
       </section>
 
-      <section className="rules panel"><div className="section-title"><div><span className="step">RULEBOOK</span><h2>이 구현의 규칙</h2></div></div><div className="rule-list"><p><b>승리</b>가로·세로·대각선 중 한 방향으로 같은 돌 5개 이상을 먼저 연결하면 승리합니다.</p><p><b>선공</b>흑이 먼저 두고 흑과 백이 한 수씩 번갈아 빈 교차점에 착수합니다.</p><p><b>장목</b>학습용 자유 오목 규칙으로 6개 이상 연결된 장목도 승리로 인정합니다.</p><p><b>사용자 AI</b>별도 Worker에서 한 수당 500ms 제한으로 실행하며 반환 수를 다시 검증합니다.</p></div></section>
+      <section className="rules panel"><div className="section-title"><div><span className="step">RULEBOOK</span><h2>두 가지 예제 게임 규칙</h2></div></div><div className="rule-list"><p><b>기본 · 15×15</b>가로·세로·대각선으로 같은 돌 5개 이상을 먼저 연결하면 즉시 승리합니다.</p><p><b>랜덤 · 9×9</b>시작할 때 착수 불가 장애물, 흑돌, 백돌을 겹치지 않게 각각 8칸(보드의 약 10%) 무작위 배치합니다.</p><p><b>스코어 종료</b>5개가 연결되어도 계속 두며, 모든 빈칸이 찬 뒤 완성된 연속 5칸 구간 수가 더 많은 쪽이 승리합니다.</p><p><b>중첩 득점</b>한 방향의 6목은 서로 겹치는 5칸 구간이 2개이므로 2점입니다. 가로·세로·두 대각선을 각각 셉니다.</p><p><b>공통</b>흑부터 번갈아 빈 교차점에 두며, 사용자 AI는 별도 Worker에서 한 수당 500ms 제한으로 실행됩니다.</p></div></section>
 
-      {modalOpen && winner && <div className="result-modal"><div className="result-card" role="dialog" aria-modal="true" aria-labelledby="resultTitle"><span>GAME OVER</span><h2 id="resultTitle">{winner === "draw" ? "무승부" : `${winner === 1 ? "흑" : "백"} 승리`}</h2><p>{notice}</p><button type="button" className="primary" onClick={resetGame}>새 대국 시작</button><button type="button" onClick={() => setModalOpen(false)}>기보 계속 보기</button></div></div>}
+      {modalOpen && winner && <div className="result-modal"><div className="result-card" role="dialog" aria-modal="true" aria-labelledby="resultTitle"><span>GAME OVER</span><h2 id="resultTitle">{winner === "draw" ? "무승부" : `${winner === 1 ? "흑" : "백"} 승리`}</h2><p>{notice}</p><button type="button" className="primary" onClick={() => resetGame()}>새 대국 시작</button><button type="button" onClick={() => setModalOpen(false)}>기보 계속 보기</button></div></div>}
     </main>
   );
 }
