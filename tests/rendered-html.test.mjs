@@ -26,7 +26,10 @@ test("contains the 9x9 random score rules and AI contract", async () => {
   assert.match(page, /Math\.round\(cells\.length \* 0\.1\)/);
   assert.match(page, /board\[Math\.floor\(cell \/ SCORE_SIZE\)\]\[cell % SCORE_SIZE\] = 3/);
   assert.match(page, /function countFiveLines/);
+  assert.match(page, /function canCreateNewFive/);
+  assert.match(page, /function scoreEndReason/);
   assert.match(page, /allLegalMoves\(next\)\.length === 0/);
+  assert.match(page, /새로운 5칸 구간을 만들 가능성이 없어 조기 종료합니다/);
   assert.match(page, /state\.mode\s+\/\/ classic \| score9/);
   assert.match(page, /6목은 서로 겹치는 5칸 구간이 2개/);
   assert.match(css, /\.blocked-cell/);

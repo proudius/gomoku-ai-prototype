@@ -131,6 +131,31 @@ function countFiveLines(board: Stone[][], player: Player) {
   return score;
 }
 
+function canCreateNewFive(board: Stone[][], player: Player) {
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board.length; col += 1) {
+      for (const [dr, dc] of DIRECTIONS) {
+        if (!inside(board, row + dr * 4, col + dc * 4)) continue;
+        let hasEmpty = false;
+        let possible = true;
+        for (let step = 0; step < 5; step += 1) {
+          const cell = board[row + dr * step][col + dc * step];
+          if (cell === 0) hasEmpty = true;
+          else if (cell !== player) { possible = false; break; }
+        }
+        if (possible && hasEmpty) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function scoreEndReason(board: Stone[][]): "full" | "no-potential" | null {
+  if (allLegalMoves(board).length === 0) return "full";
+  if (!canCreateNewFive(board, 1) && !canCreateNewFive(board, 2)) return "no-potential";
+  return null;
+}
+
 function scoreOutcome(board: Stone[][]) {
   const black = countFiveLines(board, 1);
   const white = countFiveLines(board, 2);
@@ -403,15 +428,16 @@ export default function Home() {
         setMoves(nextMoves);
         setHint(null);
         setTelemetry(decision.telemetry);
+        const scoringEnd = mode === "score9" ? scoreEndReason(next) : null;
         if (mode === "classic" && isWinAt(next, decision.row, decision.col, turn)) {
           setWinner(turn);
           setModalOpen(true);
           setNotice(`${playerName(currentKey)} 승리 · ${decision.telemetry.move}에서 오목 완성`);
-        } else if (allLegalMoves(next).length === 0) {
+        } else if (scoringEnd || (mode === "classic" && allLegalMoves(next).length === 0)) {
           const result = mode === "score9" ? scoreOutcome(next) : { black: 0, white: 0, winner: "draw" as const };
           setWinner(result.winner);
           setModalOpen(true);
-          setNotice(mode === "score9" ? `빈칸이 모두 찼습니다 · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
+          setNotice(mode === "score9" ? `${scoringEnd === "no-potential" ? "새로운 5칸 구간을 만들 가능성이 없어 조기 종료합니다" : "빈칸이 모두 찼습니다"} · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
         } else {
           setTurn(turn === 1 ? 2 : 1);
           const scoreText = mode === "score9" ? ` · 점수 흑 ${countFiveLines(next, 1)} : ${countFiveLines(next, 2)} 백` : "";
@@ -441,15 +467,16 @@ export default function Home() {
     setMoves(nextMoves);
     setHint(null);
     setTelemetry({ nodes: 0, depth: 0, elapsed: 0, source: "HUMAN", move: coordinate(row, col, board.length) });
+    const scoringEnd = mode === "score9" ? scoreEndReason(next) : null;
     if (mode === "classic" && isWinAt(next, row, col, turn)) {
       setWinner(turn);
       setModalOpen(true);
       setNotice(`${turn === 1 ? "흑" : "백"} 승리 · ${coordinate(row, col, board.length)}에서 오목 완성`);
-    } else if (allLegalMoves(next).length === 0) {
+    } else if (scoringEnd || (mode === "classic" && allLegalMoves(next).length === 0)) {
       const result = mode === "score9" ? scoreOutcome(next) : { black: 0, white: 0, winner: "draw" as const };
       setWinner(result.winner);
       setModalOpen(true);
-      setNotice(mode === "score9" ? `빈칸이 모두 찼습니다 · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
+      setNotice(mode === "score9" ? `${scoringEnd === "no-potential" ? "새로운 5칸 구간을 만들 가능성이 없어 조기 종료합니다" : "빈칸이 모두 찼습니다"} · 최종 점수 흑 ${result.black} : ${result.white} 백` : "모든 교차점을 두어 무승부입니다.");
     } else {
       setTurn(turn === 1 ? 2 : 1);
       const scoreText = mode === "score9" ? ` · 점수 흑 ${countFiveLines(next, 1)} : ${countFiveLines(next, 2)} 백` : "";
@@ -460,7 +487,7 @@ export default function Home() {
   function resetGame(targetMode: GameMode = mode) {
     setBoard(createBoard(targetMode)); setTurn(1); setWinner(null); setMoves([]); setHistory([]);
     setHint(null); setTelemetry(EMPTY_TELEMETRY); setModalOpen(false); setThinking(false);
-    setNotice(targetMode === "score9" ? "장애물·흑돌·백돌이 각각 8칸 배치되었습니다. 빈칸이 없어질 때까지 점수를 만드세요." : "흑돌을 놓으면 대국이 시작됩니다.");
+    setNotice(targetMode === "score9" ? "장애물·흑돌·백돌이 각각 8칸 배치되었습니다. 만들 수 있는 5칸 구간이 남아 있는 동안 점수를 만드세요." : "흑돌을 놓으면 대국이 시작됩니다.");
   }
 
   function undo() {
@@ -507,7 +534,7 @@ export default function Home() {
   }
 
   async function copySpec() {
-    const spec = `오목 AI 함수를 작성해 주세요.\nfunction chooseMove(state, me)\n- me: 1(흑) 또는 2(백)\n- state.mode: classic 또는 score9\n- state.board: 15x15 또는 9x9 배열, 0 빈칸 / 1 흑 / 2 백 / 3 장애물\n- state.legalMoves: 반환 가능한 { row, col } 배열\n- state.moveCount, state.lastMove 제공\n- score9: 빈칸이 없을 때 종료, 완성된 5칸 구간 수로 득점\n- 제한: 한 수 500ms, 파일 50KB\n- 반환: state.legalMoves에 있는 { row, col } 하나`;
+    const spec = `오목 AI 함수를 작성해 주세요.\nfunction chooseMove(state, me)\n- me: 1(흑) 또는 2(백)\n- state.mode: classic 또는 score9\n- state.board: 15x15 또는 9x9 배열, 0 빈칸 / 1 흑 / 2 백 / 3 장애물\n- state.legalMoves: 반환 가능한 { row, col } 배열\n- state.moveCount, state.lastMove 제공\n- score9: 빈칸이 없거나 양쪽 모두 새 5칸 구간을 만들 수 없을 때 종료, 완성된 5칸 구간 수로 득점\n- 제한: 한 수 500ms, 파일 50KB\n- 반환: state.legalMoves에 있는 { row, col } 하나`;
     await navigator.clipboard.writeText(spec);
     setCodeStatusType("success"); setCodeStatus("LLM용 오목 AI 규격을 복사했습니다.");
   }
@@ -533,10 +560,11 @@ export default function Home() {
       if (mode === "classic" && isWinAt(simBoard, decision.row, decision.col, simTurn)) {
         return { winner: simTurn as Winner, error, log: simMoves.map((move, index) => `${index + 1}.${move.player === 1 ? "B" : "W"}:${coordinate(move.row, move.col, simBoard.length)}`).join(" ") };
       }
-      if (allLegalMoves(simBoard).length === 0) {
+      const scoringEnd = mode === "score9" ? scoreEndReason(simBoard) : null;
+      if (scoringEnd || (mode === "classic" && allLegalMoves(simBoard).length === 0)) {
         if (mode === "score9") {
           const result = scoreOutcome(simBoard);
-          return { winner: result.winner, error, log: `최종 점수 흑 ${result.black} : ${result.white} 백` };
+          return { winner: result.winner, error, log: `${scoringEnd === "no-potential" ? "추가 득점 가능성 소멸로 조기 종료" : "빈칸 소진"} · 최종 점수 흑 ${result.black} : ${result.white} 백` };
         }
         return { winner: "draw" as const, error, log: "모든 교차점을 둔 무승부" };
       }
@@ -601,7 +629,7 @@ export default function Home() {
 
           <div className="game-mode-switch" role="radiogroup" aria-label="게임 규칙 선택">
             <button type="button" role="radio" aria-checked={mode === "classic"} className={mode === "classic" ? "active" : ""} onClick={() => { setMode("classic"); resetGame("classic"); }}><b>기본 오목 · 15×15</b><small>5개를 먼저 연결하면 승리</small></button>
-            <button type="button" role="radio" aria-checked={mode === "score9"} className={mode === "score9" ? "active" : ""} onClick={() => { setMode("score9"); resetGame("score9"); }}><b>랜덤 스코어 · 9×9</b><small>빈칸 종료 · 완성한 5칸 구간 득점</small></button>
+            <button type="button" role="radio" aria-checked={mode === "score9"} className={mode === "score9" ? "active" : ""} onClick={() => { setMode("score9"); resetGame("score9"); }}><b>랜덤 스코어 · 9×9</b><small>추가 득점 불가 시 종료 · 5칸 구간 득점</small></button>
           </div>
 
           <div className="player-strip opponent-strip">
@@ -714,7 +742,7 @@ export default function Home() {
         <div className="level-cards">{AI_LEVELS.map((ai) => <article className={`level-card ${p2 === ai.key ? "active" : ""}`} data-version={`V${ai.level}`} key={ai.level}><span className="bar" style={{ width: `${ai.power}%` }} /><b>{ai.name}</b><small>{ai.method}</small><p>{ai.description}</p></article>)}</div>
       </section>
 
-      <section className="rules panel"><div className="section-title"><div><span className="step">RULEBOOK</span><h2>두 가지 예제 게임 규칙</h2></div></div><div className="rule-list"><p><b>기본 · 15×15</b>가로·세로·대각선으로 같은 돌 5개 이상을 먼저 연결하면 즉시 승리합니다.</p><p><b>랜덤 · 9×9</b>시작할 때 착수 불가 장애물, 흑돌, 백돌을 겹치지 않게 각각 8칸(보드의 약 10%) 무작위 배치합니다.</p><p><b>스코어 종료</b>5개가 연결되어도 계속 두며, 모든 빈칸이 찬 뒤 완성된 연속 5칸 구간 수가 더 많은 쪽이 승리합니다.</p><p><b>중첩 득점</b>한 방향의 6목은 서로 겹치는 5칸 구간이 2개이므로 2점입니다. 가로·세로·두 대각선을 각각 셉니다.</p><p><b>공통</b>흑부터 번갈아 빈 교차점에 두며, 사용자 AI는 별도 Worker에서 한 수당 500ms 제한으로 실행됩니다.</p></div></section>
+      <section className="rules panel"><div className="section-title"><div><span className="step">RULEBOOK</span><h2>두 가지 예제 게임 규칙</h2></div></div><div className="rule-list"><p><b>기본 · 15×15</b>가로·세로·대각선으로 같은 돌 5개 이상을 먼저 연결하면 즉시 승리합니다.</p><p><b>랜덤 · 9×9</b>시작할 때 착수 불가 장애물, 흑돌, 백돌을 겹치지 않게 각각 8칸(보드의 약 10%) 무작위 배치합니다.</p><p><b>스코어 종료</b>5개가 연결되어도 계속 두며, 빈칸이 모두 차거나 양쪽 모두 새로운 연속 5칸 구간을 만들 가능성이 없어지면 즉시 점수를 정산합니다.</p><p><b>중첩 득점</b>한 방향의 6목은 서로 겹치는 5칸 구간이 2개이므로 2점입니다. 가로·세로·두 대각선을 각각 셉니다.</p><p><b>공통</b>흑부터 번갈아 빈 교차점에 두며, 사용자 AI는 별도 Worker에서 한 수당 500ms 제한으로 실행됩니다.</p></div></section>
 
       {modalOpen && winner && <div className="result-modal"><div className="result-card" role="dialog" aria-modal="true" aria-labelledby="resultTitle"><span>GAME OVER</span><h2 id="resultTitle">{winner === "draw" ? "무승부" : `${winner === 1 ? "흑" : "백"} 승리`}</h2><p>{notice}</p><button type="button" className="primary" onClick={() => resetGame()}>새 대국 시작</button><button type="button" onClick={() => setModalOpen(false)}>기보 계속 보기</button></div></div>}
     </main>
